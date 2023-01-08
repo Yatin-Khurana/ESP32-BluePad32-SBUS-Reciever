@@ -1,0 +1,19 @@
+{
+    "idf.adapterTargetName": "esp32",
+    "files.associations": {
+        "array": "cpp",
+        "chrono": "cpp",
+        "format": "cpp",
+        "forward_list": "cpp",
+        "initializer_list": "cpp",
+        "list": "cpp",
+        "regex": "cpp",
+        "vector": "cpp",
+        "xhash": "cpp",
+        "xstring": "cpp",
+        "xtree": "cpp",
+        "xutility": "cpp"
+    },
+    "idf.portWin": "COM7",
+    "idf.flashType": "UART"
+}

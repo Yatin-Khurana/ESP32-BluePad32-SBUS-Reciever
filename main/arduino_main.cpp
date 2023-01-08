@@ -1,20 +1,15 @@
-/****************************************************************************
-http://retro.moe/unijoysticle2
+/*
+    Connect any bluetooth (Bluepad32 Supported) Joypad to an Sbus Input using ESP32 as a Reciver
+    
+    since the code is built on a weekend only so ofcourse code isn't smart enough
+    to invert the SBUS signal, so external inverter is preffered
+    or you can just toggle inversion off in ardupilot/px4 code, and use it directly.
 
-Copyright 2021 Ricardo Quesada
+    take care of ttl levels maybe.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-****************************************************************************/
+    Author - Yatin-Khurana
+    Released under GNU-GPLV3 Liscence
+*/
 
 #include "sdkconfig.h"
 #ifndef CONFIG_BLUEPAD32_PLATFORM_ARDUINO
@@ -23,6 +18,30 @@ limitations under the License.
 
 #include <Arduino.h>
 #include <Bluepad32.h>
+#include <HardwareSerial.h>
+
+#define LED_BUILTIN 2
+#define BP32_MAX_GAMEPADS 1
+
+#define RC_CHANNEL_MIN 990
+#define RC_CHANNEL_MAX 2010
+
+#define SBUS_MIN_OFFSET 173
+#define SBUS_MID_OFFSET 992
+#define SBUS_MAX_OFFSET 1811
+#define SBUS_CHANNEL_NUMBER 16
+#define SBUS_PACKET_LENGTH 25
+#define SBUS_FRAME_HEADER 0x0f
+#define SBUS_FRAME_FOOTER 0x00
+#define SBUS_FRAME_FOOTER_V2 0x04
+#define SBUS_STATE_FAILSAFE 0x08
+#define SBUS_STATE_SIGNALLOSS 0x04
+#define SBUS_UPDATE_RATE 15 //ms
+
+uint8_t sbusPacket[SBUS_PACKET_LENGTH];
+int rcChannels[SBUS_CHANNEL_NUMBER];
+uint32_t sbusTime = 0;
+uint8_t playerled = 0;
 
 //
 // README FIRST, README FIRST, README FIRST
@@ -40,6 +59,56 @@ limitations under the License.
 
 GamepadPtr myGamepads[BP32_MAX_GAMEPADS];
 
+HardwareSerial SerialPort(1);
+
+void sbusPreparePacket(uint8_t packet[], int channels[], bool isSignalLoss, bool isFailsafe){
+
+    static int output[SBUS_CHANNEL_NUMBER] = {0};
+
+    /*
+     * Map 1000-2000 with middle at 1500 chanel values to
+     * 173-1811 with middle at 992 S.BUS protocol requires
+     */
+    for (uint8_t i = 0; i < SBUS_CHANNEL_NUMBER; i++) {
+        output[i] = map(channels[i], RC_CHANNEL_MIN, RC_CHANNEL_MAX, SBUS_MIN_OFFSET, SBUS_MAX_OFFSET);
+    }
+
+    uint8_t stateByte = 0x00;
+    if (isSignalLoss) {
+        stateByte |= SBUS_STATE_SIGNALLOSS;
+    }
+    if (isFailsafe) {
+        stateByte |= SBUS_STATE_FAILSAFE;
+    }
+    packet[0] = SBUS_FRAME_HEADER; //Header
+
+    packet[1] = (uint8_t) (output[0] & 0x07FF);
+    packet[2] = (uint8_t) ((output[0] & 0x07FF)>>8 | (output[1] & 0x07FF)<<3);
+    packet[3] = (uint8_t) ((output[1] & 0x07FF)>>5 | (output[2] & 0x07FF)<<6);
+    packet[4] = (uint8_t) ((output[2] & 0x07FF)>>2);
+    packet[5] = (uint8_t) ((output[2] & 0x07FF)>>10 | (output[3] & 0x07FF)<<1);
+    packet[6] = (uint8_t) ((output[3] & 0x07FF)>>7 | (output[4] & 0x07FF)<<4);
+    packet[7] = (uint8_t) ((output[4] & 0x07FF)>>4 | (output[5] & 0x07FF)<<7);
+    packet[8] = (uint8_t) ((output[5] & 0x07FF)>>1);
+    packet[9] = (uint8_t) ((output[5] & 0x07FF)>>9 | (output[6] & 0x07FF)<<2);
+    packet[10] = (uint8_t) ((output[6] & 0x07FF)>>6 | (output[7] & 0x07FF)<<5);
+    packet[11] = (uint8_t) ((output[7] & 0x07FF)>>3);
+    packet[12] = (uint8_t) ((output[8] & 0x07FF));
+    packet[13] = (uint8_t) ((output[8] & 0x07FF)>>8 | (output[9] & 0x07FF)<<3);
+    packet[14] = (uint8_t) ((output[9] & 0x07FF)>>5 | (output[10] & 0x07FF)<<6);  
+    packet[15] = (uint8_t) ((output[10] & 0x07FF)>>2);
+    packet[16] = (uint8_t) ((output[10] & 0x07FF)>>10 | (output[11] & 0x07FF)<<1);
+    packet[17] = (uint8_t) ((output[11] & 0x07FF)>>7 | (output[12] & 0x07FF)<<4);
+    packet[18] = (uint8_t) ((output[12] & 0x07FF)>>4 | (output[13] & 0x07FF)<<7);
+    packet[19] = (uint8_t) ((output[13] & 0x07FF)>>1);
+    packet[20] = (uint8_t) ((output[13] & 0x07FF)>>9 | (output[14] & 0x07FF)<<2);
+    packet[21] = (uint8_t) ((output[14] & 0x07FF)>>6 | (output[15] & 0x07FF)<<5);
+    packet[22] = (uint8_t) ((output[15] & 0x07FF)>>3);
+
+    packet[23] = stateByte; //Flags byte
+    packet[24] = SBUS_FRAME_FOOTER; //Footer
+}
+
 // This callback gets called any time a new gamepad is connected.
 // Up to 4 gamepads can be connected at the same time.
 void onConnectedGamepad(GamepadPtr gp) {
@@ -54,6 +123,14 @@ void onConnectedGamepad(GamepadPtr gp) {
                            properties.product_id);
             myGamepads[i] = gp;
             foundEmptySlot = true;
+
+            digitalWrite(LED_BUILTIN, HIGH);
+            delay(300);
+            digitalWrite(LED_BUILTIN, LOW);
+
+            // Set LED to White upon connection
+            gp->setColorLED(255, 255, 255);
+
             break;
         }
     }
@@ -70,6 +147,13 @@ void onDisconnectedGamepad(GamepadPtr gp) {
             Console.printf("CALLBACK: Gamepad is disconnected from index=%d\n", i);
             myGamepads[i] = nullptr;
             foundGamepad = true;
+            digitalWrite(LED_BUILTIN, HIGH);
+            delay(600);
+            digitalWrite(LED_BUILTIN, LOW);
+            delay(600);
+            digitalWrite(LED_BUILTIN, HIGH);
+            delay(600);
+            digitalWrite(LED_BUILTIN, LOW);
             break;
         }
     }
@@ -92,6 +176,16 @@ void setup() {
     // Forgetting Bluetooth keys prevents "paired" gamepads to reconnect.
     // But might also fix some connection / re-connection issues.
     BP32.forgetBluetoothKeys();
+
+    for (uint8_t i = 0; i < SBUS_CHANNEL_NUMBER; i++) {
+        rcChannels[i] = 1500;
+    }
+    //Serial.begin(100000, SERIAL_8E2);
+    SerialPort.begin(100000, SERIAL_8E2, 16, 17);
+    pinMode(LED_BUILTIN,OUTPUT);
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(1000);
+    digitalWrite(LED_BUILTIN, LOW);
 }
 
 // Arduino loop function. Runs in CPU 1
@@ -108,72 +202,52 @@ void loop() {
         GamepadPtr myGamepad = myGamepads[i];
 
         if (myGamepad && myGamepad->isConnected()) {
-            // There are different ways to query whether a button is pressed.
-            // By query each button individually:
-            //  a(), b(), x(), y(), l1(), etc...
-            if (myGamepad->a()) {
-                static int colorIdx = 0;
-                // Some gamepads like DS4 and DualSense support changing the color LED.
-                // It is possible to change it by calling:
-                switch (colorIdx % 3) {
-                    case 0:
-                        // Red
-                        myGamepad->setColorLED(255, 0, 0);
-                        break;
-                    case 1:
-                        // Green
-                        myGamepad->setColorLED(0, 255, 0);
-                        break;
-                    case 2:
-                        // Blue
-                        myGamepad->setColorLED(0, 0, 255);
-                        break;
-                }
-                colorIdx++;
+            uint32_t currentMillis = millis();
+
+            rcChannels[0] = map(myGamepad->axisRX(),-511, 512, 1000, 2000);
+            rcChannels[1] = map(myGamepad->axisRY(),-511, 512, 1000, 2000);
+            rcChannels[2] = map(myGamepad->axisY(),-511, 512, 1000, 2000);
+            rcChannels[3] = map(myGamepad->axisX(),-511, 512, 1000, 2000);
+
+            rcChannels[4] = myGamepad->a() ? 2000 : 1000;
+            rcChannels[5] = myGamepad->b() ? 2000 : 1000;
+            rcChannels[6] = myGamepad->x() ? 2000 : 1000;
+            rcChannels[7] = myGamepad->y() ? 2000 : 1000;
+
+            rcChannels[8] = myGamepad->l1() ? 2000 : 1000;
+            rcChannels[9] = myGamepad->r1() ? 2000 : 1000;
+
+            rcChannels[10] = map(myGamepad->brake(), 0, 1023, 1000, 2000);
+            rcChannels[11] = map(myGamepad->throttle(), 0, 1023, 1000, 2000);
+
+            rcChannels[12] = (myGamepad->dpad() & DPAD_UP)      ? 2000 : 1000;
+            rcChannels[13] = (myGamepad->dpad() & DPAD_DOWN)    ? 2000 : 1000;
+            rcChannels[14] = (myGamepad->dpad() & DPAD_LEFT)    ? 2000 : 1000;
+            rcChannels[15] = (myGamepad->dpad() & DPAD_RIGHT)   ? 2000 : 1000;
+
+            if(myGamepad->a()){
+                playerled = 1;
+            }
+            else if(myGamepad->b()){
+                playerled = 2;
+            }
+            else if(myGamepad->x()){
+                playerled = 3;
+            }
+            else if(myGamepad->y()){
+                playerled = 4;
             }
 
-            if (myGamepad->b()) {
-                // Turn on the 4 LED. Each bit represents one LED.
-                static int led = 0;
-                led++;
-                // Some gamepads like the DS3, DualSense, Nintendo Wii, Nintendo Switch
-                // support changing the "Player LEDs": those 4 LEDs that usually indicate
-                // the "gamepad seat".
-                // It is possible to change them by calling:
-                myGamepad->setPlayerLEDs(led & 0x0f);
+            myGamepad->setPlayerLEDs(playerled & 0x0f);
+
+            if (currentMillis > sbusTime) {
+                sbusPreparePacket(sbusPacket, rcChannels, false, false);
+                SerialPort.write(sbusPacket, SBUS_PACKET_LENGTH);
+
+                sbusTime = currentMillis + SBUS_UPDATE_RATE;
             }
-
-            if (myGamepad->x()) {
-                // Duration: 255 is ~2 seconds
-                // force: intensity
-                // Some gamepads like DS3, DS4, DualSense, Switch, Xbox One S support
-                // rumble.
-                // It is possible to set it by calling:
-                myGamepad->setRumble(0xc0 /* force */, 0xc0 /* duration */);
-            }
-
-            // Another way to query the buttons, is by calling buttons(), or
-            // miscButtons() which return a bitmask.
-            // Some gamepads also have DPAD, axis and more.
-            Console.printf(
-                "idx=%d, dpad: 0x%02x, buttons: 0x%04x, axis L: %4d, %4d, axis R: %4d, "
-                "%4d, brake: %4d, throttle: %4d, misc: 0x%02x\n",
-                i,                        // Gamepad Index
-                myGamepad->dpad(),        // DPAD
-                myGamepad->buttons(),     // bitmask of pressed buttons
-                myGamepad->axisX(),       // (-511 - 512) left X Axis
-                myGamepad->axisY(),       // (-511 - 512) left Y axis
-                myGamepad->axisRX(),      // (-511 - 512) right X axis
-                myGamepad->axisRY(),      // (-511 - 512) right Y axis
-                myGamepad->brake(),       // (0 - 1023): brake button
-                myGamepad->throttle(),    // (0 - 1023): throttle (AKA gas) button
-                myGamepad->miscButtons()  // bitmak of pressed "misc" buttons
-            );
-
-            // You can query the axis and other properties as well. See Gamepad.h
-            // For all the available functions.
+            delay((int)(SBUS_UPDATE_RATE/3));
         }
     }
-
-    delay(150);
 }
+
