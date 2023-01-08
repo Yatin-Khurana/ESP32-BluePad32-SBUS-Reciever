@@ -8,7 +8,7 @@
     take care of ttl levels maybe.
 
     Author - Yatin-Khurana
-    Released under GNU-GPLV3 Liscence
+    Released under GNU-GPLV3 Licence
 */
 
 #include "sdkconfig.h"
@@ -59,7 +59,7 @@ uint8_t playerled = 0;
 
 GamepadPtr myGamepads[BP32_MAX_GAMEPADS];
 
-HardwareSerial SerialPort(1);
+HardwareSerial SerialPort(2);
 
 void sbusPreparePacket(uint8_t packet[], int channels[], bool isSignalLoss, bool isFailsafe){
 
@@ -242,6 +242,19 @@ void loop() {
 
             if (currentMillis > sbusTime) {
                 sbusPreparePacket(sbusPacket, rcChannels, false, false);
+                SerialPort.write(sbusPacket, SBUS_PACKET_LENGTH);
+
+                sbusTime = currentMillis + SBUS_UPDATE_RATE;
+            }
+            delay((int)(SBUS_UPDATE_RATE/3));
+        }
+        else if(myGamepad && !myGamepad->isConnected()){
+            uint32_t currentMillis = millis();
+            if (currentMillis > sbusTime*3) {
+                for(int i=0; i<=15;i++){
+                    rcChannels[i] = 1000;
+                }
+                sbusPreparePacket(sbusPacket, rcChannels, true, true);
                 SerialPort.write(sbusPacket, SBUS_PACKET_LENGTH);
 
                 sbusTime = currentMillis + SBUS_UPDATE_RATE;

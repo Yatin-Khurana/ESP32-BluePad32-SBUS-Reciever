@@ -1,3 +1,12 @@
+# Info
+ use UART2 for Sbus out
+ switch on your DualSense
+ let it connect
+ once connected, ESP32 onboard led will blink
+ ta da!
+
+ also, when disconnected esp32 will blink twice
+
 # ESP-IDF + Arduino + Bluepad32 template app
 
 [![discord](https://img.shields.io/discord/775177861665521725.svg)](https://discord.gg/r5aMn6Cw5q)
